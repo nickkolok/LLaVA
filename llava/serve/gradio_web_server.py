@@ -138,9 +138,9 @@ def add_text(state, text, image, image_process_mode, request: gr.Request):
             return (state, state.to_gradio_chatbot(), moderation_msg, None) + (
                 no_change_btn,) * 5
 
-    text = text[:1536]  # Hard cut-off
+    #text = text[:1536]  # Hard cut-off
     if image is not None:
-        text = text[:1200]  # Hard cut-off for images
+        #text = text[:1200]  # Hard cut-off for images
         if '<image>' not in text:
             # text = '<Image><image></Image>' + text
             text = text + '\n<image>'
@@ -240,7 +240,7 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
     try:
         # Stream output
         response = requests.post(worker_addr + "/worker_generate_stream",
-            headers=headers, json=pload, stream=True, timeout=10)
+            headers=headers, json=pload, stream=True, timeout=100)
         for chunk in response.iter_lines(decode_unicode=False, delimiter=b"\0"):
             if chunk:
                 data = json.loads(chunk.decode())
@@ -253,7 +253,7 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
                     state.messages[-1][-1] = output
                     yield (state, state.to_gradio_chatbot()) + (disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
                     return
-                time.sleep(0.03)
+                #time.sleep(0.03)
     except requests.exceptions.RequestException as e:
         state.messages[-1][-1] = server_error_msg
         yield (state, state.to_gradio_chatbot()) + (disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
