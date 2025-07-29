@@ -120,10 +120,18 @@ def regenerate(state, image_process_mode, request: gr.Request):
     return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 5
 
 
-def clear_history(request: gr.Request):
-    logger.info(f"clear_history. ip: {request.client.host}")
-    state = default_conversation.copy()
-    return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 5
+# Removed clear_history function since we no longer have Clear button
+
+
+def undo_last_message(state, request: gr.Request):
+    logger.info(f"undo_last_message. ip: {request.client.host}")
+    # Remove last two messages if possible (last user message and last bot response)
+    if len(state.messages) >= 2:
+        state.messages = state.messages[:-2]
+    else:
+        # If fewer than 2 messages, just clear everything
+        state = default_conversation.copy()
+    return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 4 + (no_change_btn,)
 
 
 def add_text(state, text, image, image_process_mode, request: gr.Request):
@@ -353,7 +361,7 @@ def build_demo(embed_mode):
                     flag_btn = gr.Button(value="⚠️  Flag", interactive=False)
                     #stop_btn = gr.Button(value="⏹️  Stop Generation", interactive=False)
                     regenerate_btn = gr.Button(value="🔄  Regenerate", interactive=False)
-                    clear_btn = gr.Button(value="🗑️  Clear", interactive=False)
+                    undo_btn = gr.Button(value="↩️  Undo", interactive=False)
 
         if not embed_mode:
             gr.Markdown(tos_markdown)
@@ -361,7 +369,7 @@ def build_demo(embed_mode):
         url_params = gr.JSON(visible=False)
 
         # Register listeners
-        btn_list = [upvote_btn, downvote_btn, flag_btn, regenerate_btn, clear_btn]
+        btn_list = [upvote_btn, downvote_btn, flag_btn, regenerate_btn, undo_btn]
         upvote_btn.click(upvote_last_response,
             [state, model_selector], [textbox, upvote_btn, downvote_btn, flag_btn])
         downvote_btn.click(downvote_last_response,
@@ -372,7 +380,7 @@ def build_demo(embed_mode):
             [state, chatbot, textbox, imagebox] + btn_list).then(
             http_bot, [state, model_selector, temperature, top_p, max_output_tokens],
             [state, chatbot] + btn_list)
-        clear_btn.click(clear_history, None, [state, chatbot, textbox, imagebox] + btn_list)
+        undo_btn.click(undo_last_message, [state], [state, chatbot, textbox, imagebox] + btn_list)
 
         textbox.submit(add_text, [state, textbox, imagebox, image_process_mode], [state, chatbot, textbox, imagebox] + btn_list
             ).then(http_bot, [state, model_selector, temperature, top_p, max_output_tokens],
