@@ -24,6 +24,7 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from transformers import TextIteratorStreamer
 from threading import Thread
 
+from chat_ignore import process_ignore_directives
 
 GB = 1 << 30
 
@@ -124,6 +125,7 @@ class ModelWorker:
         tokenizer, model, image_processor = self.tokenizer, self.model, self.image_processor
 
         prompt = params["prompt"]
+        prompt = process_ignore_directives(prompt)
         ori_prompt = prompt
         images = params.get("images", None)
         num_image_tokens = 0
