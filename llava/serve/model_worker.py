@@ -24,7 +24,7 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from transformers import TextIteratorStreamer
 from threading import Thread
 
-from chat_ignore import process_ignore_directives
+from llava.serve.chat_ignore import process_ignore_directives
 
 GB = 1 << 30
 
