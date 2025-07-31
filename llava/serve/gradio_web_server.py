@@ -12,6 +12,9 @@ from llava.conversation import (default_conversation, conv_templates,
 from llava.constants import LOGDIR
 from llava.utils import (build_logger, server_error_msg,
     violates_moderation, moderation_msg)
+
+from llava.serve.chat_ignore import process_ignore_directives
+
 import hashlib
 
 
@@ -218,6 +221,7 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
 
     # Construct prompt
     prompt = state.get_prompt()
+    prompt = process_ignore_directives(prompt)
 
     all_images = state.get_images(return_pil=True)
     all_image_hash = [hashlib.md5(image.tobytes()).hexdigest() for image in all_images]
