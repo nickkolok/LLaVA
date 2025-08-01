@@ -1,8 +1,143 @@
-import re
+import argparse
+import datetime
+import json
+import os
+import time
 
-NEXT_TAG_RE = re.compile(r'\s*<next/>\s*', flags=re.IGNORECASE)
+import gradio as gr
+import requests
 
-def _add_text_single(state, text, image, image_process_mode, request: gr.Request):
+from llava.conversation import (default_conversation, conv_templates,
+                                   SeparatorStyle)
+from llava.constants import LOGDIR
+from llava.utils import (build_logger, server_error_msg,
+    violates_moderation, moderation_msg)
+
+from llava.serve.chat_ignore import process_ignore_directives
+
+import hashlib
+
+
+logger = build_logger("gradio_web_server", "gradio_web_server.log")
+
+headers = {"User-Agent": "LLaVA Client"}
+
+no_change_btn = gr.Button.update()
+enable_btn = gr.Button.update(interactive=True)
+disable_btn = gr.Button.update(interactive=False)
+
+priority = {
+    "vicuna-13b": "aaaaaaa",
+    "koala-13b": "aaaaaab",
+}
+
+
+def get_conv_log_filename():
+    t = datetime.datetime.now()
+    name = os.path.join(LOGDIR, f"{t.year}-{t.month:02d}-{t.day:02d}-conv.json")
+    return name
+
+
+def get_model_list():
+    ret = requests.post(args.controller_url + "/refresh_all_workers")
+    assert ret.status_code == 200
+    ret = requests.post(args.controller_url + "/list_models")
+    models = ret.json()["models"]
+    models.sort(key=lambda x: priority.get(x, x))
+    logger.info(f"Models: {models}")
+    return models
+
+
+get_window_url_params = """
+function() {
+    const params = new URLSearchParams(window.location.search);
+    url_params = Object.fromEntries(params);
+    console.log(url_params);
+    return url_params;
+    }
+"""
+
+
+def load_demo(url_params, request: gr.Request):
+    logger.info(f"load_demo. ip: {request.client.host}. params: {url_params}")
+
+    dropdown_update = gr.Dropdown.update(visible=True)
+    if "model" in url_params:
+        model = url_params["model"]
+        if model in models:
+            dropdown_update = gr.Dropdown.update(
+                value=model, visible=True)
+
+    state = default_conversation.copy()
+    return state, dropdown_update
+
+
+def load_demo_refresh_model_list(request: gr.Request):
+    logger.info(f"load_demo. ip: {request.client.host}")
+    models = get_model_list()
+    state = default_conversation.copy()
+    dropdown_update = gr.Dropdown.update(
+        choices=models,
+        value=models[0] if len(models) > 0 else ""
+    )
+    return state, dropdown_update
+
+
+def vote_last_response(state, vote_type, model_selector, request: gr.Request):
+    with open(get_conv_log_filename(), "a") as fout:
+        data = {
+            "tstamp": round(time.time(), 4),
+            "type": vote_type,
+            "model": model_selector,
+            "state": state.dict(),
+            "ip": request.client.host,
+        }
+        fout.write(json.dumps(data) + "\n")
+
+
+def upvote_last_response(state, model_selector, request: gr.Request):
+    logger.info(f"upvote. ip: {request.client.host}")
+    vote_last_response(state, "upvote", model_selector, request)
+    return ("",) + (disable_btn,) * 3
+
+
+def downvote_last_response(state, model_selector, request: gr.Request):
+    logger.info(f"downvote. ip: {request.client.host}")
+    vote_last_response(state, "downvote", model_selector, request)
+    return ("",) + (disable_btn,) * 3
+
+
+def flag_last_response(state, model_selector, request: gr.Request):
+    logger.info(f"flag. ip: {request.client.host}")
+    vote_last_response(state, "flag", model_selector, request)
+    return ("",) + (disable_btn,) * 3
+
+
+def regenerate(state, image_process_mode, request: gr.Request):
+    logger.info(f"regenerate. ip: {request.client.host}")
+    state.messages[-1][-1] = None
+    prev_human_msg = state.messages[-2]
+    if type(prev_human_msg[1]) in (tuple, list):
+        prev_human_msg[1] = (*prev_human_msg[1][:2], image_process_mode)
+    state.skip_next = False
+    return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 5
+
+
+# Removed clear_history function since we no longer have Clear button
+
+
+def undo_last_message(state, request: gr.Request):
+    logger.info(f"undo_last_message. ip: {request.client.host}")
+    # Remove last two messages if possible (last user message and last bot response)
+    if len(state.messages) >= 2:
+        state.messages = state.messages[:-2]
+    else:
+        # If fewer than 2 messages, just clear everything
+        state = default_conversation.copy()
+    return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 4 + (no_change_btn,)
+
+
+def add_text(state, text, image, image_process_mode, request: gr.Request):
     logger.info(f"add_text. ip: {request.client.host}. len: {len(text)}")
     if len(text) <= 0 and image is None:
         state.skip_next = True
@@ -14,8 +149,11 @@ def _add_text_single(state, text, image, image_process_mode, request: gr.Request
             return (state, state.to_gradio_chatbot(), moderation_msg, None) + (
                 no_change_btn,) * 5
 
+    #text = text[:1536]  # Hard cut-off
     if image is not None:
+        #text = text[:1200]  # Hard cut-off for images
         if '<image>' not in text:
+            # text = '<Image><image></Image>' + text
             text = text + '\n<image>'
         text = (text, image, image_process_mode)
         if len(state.get_images(return_pil=True)) > 0:
@@ -26,60 +164,339 @@ def _add_text_single(state, text, image, image_process_mode, request: gr.Request
     return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 5
 
 
-def process_multiple_segments(state, segments, image, image_process_mode,
-                              model_selector, temperature, top_p, max_new_tokens,
-                              request: gr.Request):
-    image_attached = False
+def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request: gr.Request):
+    logger.info(f"http_bot. ip: {request.client.host}")
+    start_tstamp = time.time()
+    model_name = model_selector
 
-    for i, segment in enumerate(segments):
-        logger.info(f"Processing segment {i+1}/{len(segments)}. ip: {request.client.host}")
+    if state.skip_next:
+        # This generate call is skipped due to invalid inputs
+        yield (state, state.to_gradio_chatbot()) + (no_change_btn,) * 5
+        return
 
-        segment_image = image if (image is not None and not image_attached) else None
-        if segment_image is not None:
-            image_attached = True
-
-        if segment_image is not None:
-            if '<image>' not in segment:
-                segment = segment + '\n<image>'
-            segment_text = (segment, segment_image, image_process_mode)
+    if len(state.messages) == state.offset + 2:
+        # First round of conversation
+        if "llava" in model_name.lower():
+            if 'llama-2' in model_name.lower():
+                template_name = "llava_llama_2"
+            elif "v1" in model_name.lower():
+                if 'mmtag' in model_name.lower():
+                    template_name = "v1_mmtag"
+                elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
+                    template_name = "v1_mmtag"
+                else:
+                    template_name = "llava_v1"
+            elif "mpt" in model_name.lower():
+                template_name = "mpt"
+            else:
+                if 'mmtag' in model_name.lower():
+                    template_name = "v0_mmtag"
+                elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
+                    template_name = "v0_mmtag"
+                else:
+                    template_name = "llava_v0"
+        elif "mpt" in model_name:
+            template_name = "mpt_text"
+        elif "llama-2" in model_name:
+            template_name = "llama_2"
         else:
-            segment_text = segment
+            template_name = "vicuna_v1"
+        new_state = conv_templates[template_name].copy()
+        new_state.append_message(new_state.roles[0], state.messages[-2][1])
+        new_state.append_message(new_state.roles[1], None)
+        state = new_state
 
-        state.append_message(state.roles[0], segment_text)
+    # Query worker address
+    controller_url = args.controller_url
+    ret = requests.post(controller_url + "/get_worker_address",
+            json={"model": model_name})
+    worker_addr = ret.json()["address"]
+    logger.info(f"model_name: {model_name}, worker_addr: {worker_addr}")
+
+    # No available worker
+    if worker_addr == "":
+        state.messages[-1][-1] = server_error_msg
+        yield (state, state.to_gradio_chatbot(), disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
+        return
+
+    # Construct prompt
+    prompt = state.get_prompt()
+    prompt = process_ignore_directives(prompt)
+
+    all_images = state.get_images(return_pil=True)
+    all_image_hash = [hashlib.md5(image.tobytes()).hexdigest() for image in all_images]
+    for image, hash in zip(all_images, all_image_hash):
+        t = datetime.datetime.now()
+        filename = os.path.join(LOGDIR, "serve_images", f"{t.year}-{t.month:02d}-{t.day:02d}", f"{hash}.jpg")
+        if not os.path.isfile(filename):
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            image.save(filename)
+
+    # Make requests
+    pload = {
+        "model": model_name,
+        "prompt": prompt,
+        "temperature": float(temperature),
+        "top_p": float(top_p),
+        "max_new_tokens": min(int(max_new_tokens), 1536),
+        "stop": state.sep if state.sep_style in [SeparatorStyle.SINGLE, SeparatorStyle.MPT] else state.sep2,
+        "images": f'List of {len(state.get_images())} images: {all_image_hash}',
+    }
+    logger.info(f"==== request ====\n{pload}")
+
+    pload['images'] = state.get_images()
+
+    state.messages[-1][-1] = "▌"
+    yield (state, state.to_gradio_chatbot()) + (disable_btn,) * 5
+
+    try:
+        # Stream output
+        response = requests.post(worker_addr + "/worker_generate_stream",
+            headers=headers, json=pload, stream=True, timeout=100)
+        for chunk in response.iter_lines(decode_unicode=False, delimiter=b"\0"):
+            if chunk:
+                data = json.loads(chunk.decode())
+                if data["error_code"] == 0:
+                    output = data["text"][len(prompt):].strip()
+                    state.messages[-1][-1] = output + "▌"
+                    yield (state, state.to_gradio_chatbot()) + (disable_btn,) * 5
+                else:
+                    output = data["text"] + f" (error_code: {data['error_code']})"
+                    state.messages[-1][-1] = output
+                    yield (state, state.to_gradio_chatbot()) + (disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
+                    return
+                #time.sleep(0.03)
+    except requests.exceptions.RequestException as e:
+        state.messages[-1][-1] = server_error_msg
+        yield (state, state.to_gradio_chatbot()) + (disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
+        return
+
+    state.messages[-1][-1] = state.messages[-1][-1][:-1]
+    yield (state, state.to_gradio_chatbot()) + (enable_btn,) * 5
+
+    finish_tstamp = time.time()
+    logger.info(f"{output}")
+
+    with open(get_conv_log_filename(), "a") as fout:
+        data = {
+            "tstamp": round(finish_tstamp, 4),
+            "type": "chat",
+            "model": model_name,
+            "start": round(start_tstamp, 4),
+            "finish": round(start_tstamp, 4),
+            "state": state.dict(),
+            "images": all_image_hash,
+            "ip": request.client.host,
+        }
+        fout.write(json.dumps(data) + "\n")
+
+
+# --- New function to handle messages with <next/> tags ---
+
+def http_bot_multi(state, model_selector, temperature, top_p, max_new_tokens, request: gr.Request):
+    """
+    Handles messages containing one or more <next/> tags by splitting the user message
+    and sending each part sequentially to the worker.
+    """
+    logger.info(f"http_bot_multi. ip: {request.client.host}")
+
+    if state.skip_next:
+        # This generate call is skipped due to invalid inputs
+        yield (state, state.to_gradio_chatbot()) + (no_change_btn,) * 5
+        return
+
+    # Extract the last user message (the one before the last bot placeholder)
+    last_user_message = state.messages[-2][1]
+
+    # Determine if last_user_message contains image tuple or plain text
+    # We only split if it's a plain string (not a tuple)
+    if isinstance(last_user_message, (tuple, list)):
+        # For simplicity, join text part only for splitting
+        text_part = last_user_message[0]
+        image = last_user_message[1]
+        image_process_mode = last_user_message[2] if len(last_user_message) > 2 else None
+    else:
+        text_part = last_user_message
+        image = None
+        image_process_mode = None
+
+    # Split by <next/> tag, strip whitespace around tags
+    parts = [part.strip() for part in text_part.split('<next/>')]
+
+    # For each part, we will send it to the worker sequentially
+    # We will update the conversation state accordingly
+
+    model_name = model_selector
+    controller_url = args.controller_url
+
+    # Determine template and initialize new_state if first message in conversation
+    if len(state.messages) == state.offset + 2:
+        if "llava" in model_name.lower():
+            if 'llama-2' in model_name.lower():
+                template_name = "llava_llama_2"
+            elif "v1" in model_name.lower():
+                if 'mmtag' in model_name.lower():
+                    template_name = "v1_mmtag"
+                elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
+                    template_name = "v1_mmtag"
+                else:
+                    template_name = "llava_v1"
+            elif "mpt" in model_name.lower():
+                template_name = "mpt"
+            else:
+                if 'mmtag' in model_name.lower():
+                    template_name = "v0_mmtag"
+                elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
+                    template_name = "v0_mmtag"
+                else:
+                    template_name = "llava_v0"
+        elif "mpt" in model_name:
+            template_name = "mpt_text"
+        elif "llama-2" in model_name:
+            template_name = "llama_2"
+        else:
+            template_name = "vicuna_v1"
+        new_state = conv_templates[template_name].copy()
+        new_state.append_message(new_state.roles[0], parts[0] if image is None else (parts[0], image, image_process_mode))
+        new_state.append_message(new_state.roles[1], None)
+        state = new_state
+        # We'll start from part index 1 next
+        start_part_idx = 1
+    else:
+        start_part_idx = 0
+
+    # Query worker address
+    ret = requests.post(controller_url + "/get_worker_address",
+            json={"model": model_name})
+    worker_addr = ret.json()["address"]
+    logger.info(f"model_name: {model_name}, worker_addr: {worker_addr}")
+
+    if worker_addr == "":
+        state.messages[-1][-1] = server_error_msg
+        yield (state, state.to_gradio_chatbot(), disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
+        return
+
+    # Helper function to send one part and stream response
+    def send_part_and_stream(state, part_text, is_last_part):
+        # Append user message part and bot placeholder
+        state.append_message(state.roles[0], part_text)
         state.append_message(state.roles[1], None)
-        state.skip_next = False
 
-        bot_gen = http_bot(state, model_selector, temperature, top_p, max_new_tokens, request)
+        prompt = state.get_prompt()
+        prompt = process_ignore_directives(prompt)
+
+        all_images = state.get_images(return_pil=True)
+        all_image_hash = [hashlib.md5(image.tobytes()).hexdigest() for image in all_images]
+        for image, hash in zip(all_images, all_image_hash):
+            t = datetime.datetime.now()
+            filename = os.path.join(LOGDIR, "serve_images", f"{t.year}-{t.month:02d}-{t.day:02d}", f"{hash}.jpg")
+            if not os.path.isfile(filename):
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
+                image.save(filename)
+
+        pload = {
+            "model": model_name,
+            "prompt": prompt,
+            "temperature": float(temperature),
+            "top_p": float(top_p),
+            "max_new_tokens": min(int(max_new_tokens), 1536),
+            "stop": state.sep if state.sep_style in [SeparatorStyle.SINGLE, SeparatorStyle.MPT] else state.sep2,
+            "images": f'List of {len(state.get_images())} images: {all_image_hash}',
+        }
+        pload['images'] = state.get_images()
+
+        state.messages[-1][-1] = "▌"
+        yield (state, state.to_gradio_chatbot()) + (disable_btn,) * 5
 
         try:
-            for output in bot_gen:
-                yield output
-        except Exception as e:
-            logger.error(f"Error in processing segment {i+1}: {e}")
+            response = requests.post(worker_addr + "/worker_generate_stream",
+                headers=headers, json=pload, stream=True, timeout=100)
+            for chunk in response.iter_lines(decode_unicode=False, delimiter=b"\0"):
+                if chunk:
+                    data = json.loads(chunk.decode())
+                    if data["error_code"] == 0:
+                        output = data["text"][len(prompt):].strip()
+                        state.messages[-1][-1] = output + "▌"
+                        yield (state, state.to_gradio_chatbot()) + (disable_btn,) * 5
+                    else:
+                        output = data["text"] + f" (error_code: {data['error_code']})"
+                        state.messages[-1][-1] = output
+                        yield (state, state.to_gradio_chatbot()) + (disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
+                        return False
+        except requests.exceptions.RequestException as e:
             state.messages[-1][-1] = server_error_msg
             yield (state, state.to_gradio_chatbot()) + (disable_btn, disable_btn, disable_btn, enable_btn, enable_btn)
+            return False
+
+        # Remove trailing '▌'
+        if state.messages[-1][-1] is not None and state.messages[-1][-1].endswith("▌"):
+            state.messages[-1][-1] = state.messages[-1][-1][:-1]
+
+        # If last part, enable buttons, else disable
+        btn_state = enable_btn if is_last_part else disable_btn
+        yield (state, state.to_gradio_chatbot()) + (btn_state,) * 5
+
+        return True
+
+    # First part was added above if first message, otherwise all parts need to be sent
+    # We'll iterate through parts from start_part_idx to end sequentially
+    for i in range(start_part_idx, len(parts)):
+        part = parts[i]
+        # If original message had image tuple, only first part includes image, others are text only
+        part_to_send = part
+        if i == 0 and image is not None:
+            part_to_send = (part, image, image_process_mode)
+
+        # Send part and stream response
+        result = yield from send_part_and_stream(state, part_to_send, is_last_part=(i == len(parts) -1))
+        if result is False:
+            # Error occurred, stop processing further parts
             return
 
-    return
+    finish_tstamp = time.time()
+    logger.info(f"Finished multi-part generation.")
+
+    with open(get_conv_log_filename(), "a") as fout:
+        data = {
+            "tstamp": round(finish_tstamp, 4),
+            "type": "chat",
+            "model": model_name,
+            "start": round(finish_tstamp, 4),  # Could be improved to track start time
+            "finish": round(finish_tstamp, 4),
+            "state": state.dict(),
+            "images": [hashlib.md5(img.tobytes()).hexdigest() for img in state.get_images(return_pil=True)],
+            "ip": request.client.host,
+        }
+        fout.write(json.dumps(data) + "\n")
 
 
-def add_text(state, text, image, image_process_mode, model_selector,
-             temperature, top_p, max_new_tokens, request: gr.Request):
-    segments = NEXT_TAG_RE.split(text.strip())
-    if len(segments) <= 1:
-        return _add_text_single(state, text, image, image_process_mode, request)
-    else:
-        return process_multiple_segments(state, segments, image, image_process_mode,
-                                         model_selector, temperature, top_p,
-                                         max_new_tokens, request)
+
+title_markdown = ("""
+# 🌋 LLaVA: Large Language and Vision Assistant
+[[Project Page]](https://llava-vl.github.io) [[Paper]](https://arxiv.org/abs/2304.08485) [[Code]](https://github.com/haotian-liu/LLaVA) [[Model]](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md)
+""")
+
+tos_markdown = ("""
+### Terms of use
+By using this service, users are required to agree to the following terms:
+The service is a research preview intended for non-commercial use only. It only provides limited safety measures and may generate offensive content. It must not be used for any illegal, harmful, violent, racist, or sexual purposes. The service may collect user dialogue data for future research.
+Please click the "Flag" button if you get any inappropriate answer! We will collect those to keep improving our moderator.
+For an optimal experience, please use desktop computers for this demo, as mobile devices may compromise its quality.
+""")
 
 
-def add_text_wrapper(state, text, image, image_process_mode, model_selector,
-                     temperature, top_p, max_new_tokens, request: gr.Request):
-    result = add_text(state, text, image, image_process_mode, model_selector,
-                      temperature, top_p, max_new_tokens, request)
-    return result
+learn_more_markdown = ("""
+### License
+The service is a research preview intended for non-commercial use only, subject to the model [License](https://github.com/facebookresearch/llama/blob/main/MODEL_CARD.md) of LLaMA, [Terms of Use](https://openai.com/policies/terms-of-use) of the data generated by OpenAI, and [Privacy Practices](https://chrome.google.com/webstore/detail/sharegpt-share-your-chatg/daiacboceoaocpibfodeljbdfacokfjb) of ShareGPT. Please contact us if you find any potential violation.
+""")
 
+block_css = """
+
+#buttons button {
+    min-width: min(120px,100%);
+}
+
+"""
 
 def build_demo(embed_mode):
     textbox = gr.Textbox(show_label=False, placeholder="Enter text and press ENTER", container=False)
@@ -127,6 +544,7 @@ def build_demo(embed_mode):
                     upvote_btn = gr.Button(value="👍  Upvote", interactive=False)
                     downvote_btn = gr.Button(value="👎  Downvote", interactive=False)
                     flag_btn = gr.Button(value="⚠️  Flag", interactive=False)
+                    #stop_btn = gr.Button(value="⏹️  Stop Generation", interactive=False)
                     regenerate_btn = gr.Button(value="🔄  Regenerate", interactive=False)
                     undo_btn = gr.Button(value="↩️  Undo", interactive=False)
 
@@ -135,6 +553,7 @@ def build_demo(embed_mode):
             gr.Markdown(learn_more_markdown)
         url_params = gr.JSON(visible=False)
 
+        # Register listeners
         btn_list = [upvote_btn, downvote_btn, flag_btn, regenerate_btn, undo_btn]
         upvote_btn.click(upvote_last_response,
             [state, model_selector], [textbox, upvote_btn, downvote_btn, flag_btn])
@@ -144,22 +563,16 @@ def build_demo(embed_mode):
             [state, model_selector], [textbox, upvote_btn, downvote_btn, flag_btn])
         regenerate_btn.click(regenerate, [state, image_process_mode],
             [state, chatbot, textbox, imagebox] + btn_list).then(
-            http_bot, [state, model_selector, temperature, top_p, max_output_tokens],
+            http_bot_multi, [state, model_selector, temperature, top_p, max_output_tokens],
             [state, chatbot] + btn_list)
         undo_btn.click(undo_last_message, [state], [state, chatbot, textbox, imagebox] + btn_list)
 
-        # Updated event handlers for submit with multi-segment support
-        textbox.submit(
-            add_text_wrapper,
-            inputs=[state, textbox, imagebox, image_process_mode, model_selector, temperature, top_p, max_output_tokens, gr.Request],
-            outputs=[state, chatbot, textbox, imagebox] + btn_list
-        )
-
-        submit_btn.click(
-            add_text_wrapper,
-            inputs=[state, textbox, imagebox, image_process_mode, model_selector, temperature, top_p, max_output_tokens, gr.Request],
-            outputs=[state, chatbot, textbox, imagebox] + btn_list
-        )
+        textbox.submit(add_text, [state, textbox, imagebox, image_process_mode], [state, chatbot, textbox, imagebox] + btn_list
+            ).then(http_bot_multi, [state, model_selector, temperature, top_p, max_output_tokens],
+                   [state, chatbot] + btn_list)
+        submit_btn.click(add_text, [state, textbox, imagebox, image_process_mode], [state, chatbot, textbox, imagebox] + btn_list
+            ).then(http_bot_multi, [state, model_selector, temperature, top_p, max_output_tokens],
+                   [state, chatbot] + btn_list)
 
         if args.model_list_mode == "once":
             demo.load(load_demo, [url_params], [state, model_selector],
@@ -170,3 +583,31 @@ def build_demo(embed_mode):
             raise ValueError(f"Unknown model list mode: {args.model_list_mode}")
 
     return demo
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--controller-url", type=str, default="http://localhost:21001")
+    parser.add_argument("--concurrency-count", type=int, default=10)
+    parser.add_argument("--model-list-mode", type=str, default="once",
+        choices=["once", "reload"])
+    parser.add_argument("--share", action="store_true")
+    parser.add_argument("--moderate", action="store_true")
+    parser.add_argument("--embed", action="store_true")
+    args = parser.parse_args()
+    logger.info(f"args: {args}")
+
+    models = get_model_list()
+
+    logger.info(args)
+    demo = build_demo(args.embed)
+    demo.queue(
+        concurrency_count=args.concurrency_count,
+        api_open=False
+    ).launch(
+        server_name=args.host,
+        server_port=args.port,
+        share=args.share
+    )
