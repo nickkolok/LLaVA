@@ -8,6 +8,20 @@ def test_process_ignore_directives():
                     "USER: !@IGNORE What's over there? ASSISTANT: There is a car")
     expected = ("USER: What is it? ASSISTANT: This is a pen "
                 "USER: What's over there? ASSISTANT: There is a car")
+                
+    print(process_ignore_directives(conversation))
+    print(expected)
+    assert process_ignore_directives(conversation) == expected
+    
+    
+    conversation = ("USER: What is it? ASSISTANT: This is a pen</s>"
+                    "USER: What's that? ASSISTANT: That's a cat</s>"
+                    "USER: !@IGNORE What's over there? ASSISTANT: There is a car</s>")
+    expected = ("USER: What is it? ASSISTANT: This is a pen</s>"
+                "USER: What's over there? ASSISTANT: There is a car</s>")
+                
+    print(process_ignore_directives(conversation))
+    print(expected)
     assert process_ignore_directives(conversation) == expected
 
     # Multiple !@IGNORE directives
@@ -41,6 +55,20 @@ def test_process_ignore_directives():
                  "USER: Q4? ASSISTANT: A4. "
                  "USER: Q5? ASSISTANT: A5.")
     assert process_ignore_directives(conversation5) == expected5
+
+    # Nested !@IGNORE (multiple in a row)
+    conversation6 = ("USER: Q1? ASSISTANT: A1. "
+                     "USER: Q2? ASSISTANT: A2. "
+                     "USER: Q3? ASSISTANT: A3. "
+                     "USER: !@IGNORE !@IGNORE Q4? ASSISTANT: A4. "
+                     "USER: Q5? ASSISTANT: A5.")
+    expected6 = ("USER: Q1? ASSISTANT: A1. "
+                 "USER: Q4? ASSISTANT: A4. "
+                 "USER: Q5? ASSISTANT: A5.")
+    print(process_ignore_directives(conversation6))
+    print(expected6)
+    assert process_ignore_directives(conversation6) == expected6
+
 
     print("All tests passed!")
 
