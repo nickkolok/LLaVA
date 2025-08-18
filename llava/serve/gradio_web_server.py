@@ -55,7 +55,7 @@ function() {
 
 
 def load_demo(url_params, request: gr.Request):
-    logger.info(f"load_demo. ip: {request.client.host}. params: {url_params}")
+    logger.info(f"load_demo. params: {url_params}")
 
     dropdown_update = gr.Dropdown.update(visible=True)
     if "model" in url_params:
@@ -69,7 +69,7 @@ def load_demo(url_params, request: gr.Request):
 
 
 def load_demo_refresh_model_list(request: gr.Request):
-    logger.info(f"load_demo. ip: {request.client.host}")
+    logger.info(f"load_demo")
     models = get_model_list()
     state = default_conversation.copy()
     dropdown_update = gr.Dropdown.update(
@@ -95,25 +95,25 @@ enable_btn = gr.Button.update(interactive=True)
 disable_btn = gr.Button.update(interactive=False)
 
 def upvote_last_response(state, model_selector, request: gr.Request):
-    logger.info(f"upvote. ip: {request.client.host}")
+    logger.info(f"upvote")
     vote_last_response(state, "upvote", model_selector, request)
     return ("",) + (disable_btn,) * 3
 
 
 def downvote_last_response(state, model_selector, request: gr.Request):
-    logger.info(f"downvote. ip: {request.client.host}")
+    logger.info(f"downvote")
     vote_last_response(state, "downvote", model_selector, request)
     return ("",) + (disable_btn,) * 3
 
 
 def flag_last_response(state, model_selector, request: gr.Request):
-    logger.info(f"flag. ip: {request.client.host}")
+    logger.info(f"flag")
     vote_last_response(state, "flag", model_selector, request)
     return ("",) + (disable_btn,) * 3
 
 
 def regenerate(state, image_process_mode, request: gr.Request):
-    logger.info(f"regenerate. ip: {request.client.host}")
+    logger.info(f"regenerate")
     state.messages[-1][-1] = None
     prev_human_msg = state.messages[-2]
     if type(prev_human_msg[1]) in (tuple, list):
@@ -126,7 +126,7 @@ def regenerate(state, image_process_mode, request: gr.Request):
 
 
 def undo_last_message(state, request: gr.Request):
-    logger.info(f"undo_last_message. ip: {request.client.host}")
+    logger.info(f"undo_last_message")
     # Remove last two messages if possible (last user message and last bot response)
     if len(state.messages) >= 2:
         state.messages = state.messages[:-2]
@@ -137,7 +137,7 @@ def undo_last_message(state, request: gr.Request):
 
 
 def add_text(state, text, image, image_process_mode, request: gr.Request):
-    logger.info(f"add_text. ip: {request.client.host}. len: {len(text)}")
+    logger.info(f"add_text. len: {len(text)}")
     if len(text) <= 0 and image is None:
         state.skip_next = True
         return (state, state.to_gradio_chatbot(), "", None) + (no_change_btn,) * 5
@@ -164,7 +164,7 @@ def add_text(state, text, image, image_process_mode, request: gr.Request):
 
 
 def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request: gr.Request):
-    logger.info(f"http_bot. ip: {request.client.host}")
+    logger.info(f"http_bot")
     start_tstamp = time.time()
     model_name = model_selector
 
