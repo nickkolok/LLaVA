@@ -22,10 +22,6 @@ logger = build_logger("gradio_web_server", "gradio_web_server.log")
 
 headers = {"User-Agent": "LLaVA Client"}
 
-no_change_btn = gr.Button.update()
-enable_btn = gr.Button.update(interactive=True)
-disable_btn = gr.Button.update(interactive=False)
-
 priority = {
     "vicuna-13b": "aaaaaaa",
     "koala-13b": "aaaaaab",
@@ -94,6 +90,9 @@ def vote_last_response(state, vote_type, model_selector, request: gr.Request):
         }
         fout.write(json.dumps(data) + "\n")
 
+no_change_btn = gr.Button.update()
+enable_btn = gr.Button.update(interactive=True)
+disable_btn = gr.Button.update(interactive=False)
 
 def upvote_last_response(state, model_selector, request: gr.Request):
     logger.info(f"upvote. ip: {request.client.host}")
@@ -394,8 +393,7 @@ def build_demo(embed_mode):
                    [state, chatbot] + btn_list)
 
         if args.model_list_mode == "once":
-            demo.load(load_demo, [url_params], [state, model_selector],
-                _js=get_window_url_params)
+            demo.load(load_demo, [url_params], [state, model_selector], _js=get_window_url_params)
         elif args.model_list_mode == "reload":
             demo.load(load_demo_refresh_model_list, None, [state, model_selector])
         else:
@@ -410,8 +408,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int)
     parser.add_argument("--controller-url", type=str, default="http://localhost:21001")
     parser.add_argument("--concurrency-count", type=int, default=10)
-    parser.add_argument("--model-list-mode", type=str, default="once",
-        choices=["once", "reload"])
+    parser.add_argument("--model-list-mode", type=str, default="once", choices=["once", "reload"])
     parser.add_argument("--share", action="store_true")
     parser.add_argument("--moderate", action="store_true")
     parser.add_argument("--embed", action="store_true")
