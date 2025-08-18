@@ -113,12 +113,11 @@ def get_model_list():
 def load_demo(url_params, request: gr.Request):
     logger.info(f"load_demo. params: {url_params}")
 
-    dropdown_update = gr.Dropdown.update(visible=True)
+    dropdown_update = gr.Dropdown(visible=True)
     if "model" in url_params:
         model = url_params["model"]
         if model in models:
-            dropdown_update = gr.Dropdown.update(
-                value=model, visible=True)
+            dropdown_update = gr.Dropdown(value=model, visible=True)
 
     state = default_conversation.copy()
     return state, dropdown_update
@@ -128,8 +127,7 @@ def load_demo_refresh_model_list(request: gr.Request):
     logger.info(f"load_demo")
     models = get_model_list()
     state = default_conversation.copy()
-    dropdown_update = gr.Dropdown.update(
-        choices=models,
+    dropdown_update = gr.Dropdown(choices=models,
         value=models[0] if len(models) > 0 else ""
     )
     return state, dropdown_update
@@ -146,9 +144,9 @@ def vote_last_response(state, vote_type, model_selector, request: gr.Request):
         }
         fout.write(json.dumps(data) + "\n")
 
-no_change_btn = gr.Button.update()
-enable_btn = gr.Button.update(interactive=True)
-disable_btn = gr.Button.update(interactive=False)
+no_change_btn = gr.Button()
+enable_btn = gr.Button(interactive=True)
+disable_btn = gr.Button(interactive=False)
 
 def upvote_last_response(state, model_selector, request: gr.Request):
     logger.info(f"upvote")
