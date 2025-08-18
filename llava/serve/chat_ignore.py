@@ -42,14 +42,23 @@ def process_ignore_directives(conversation: str) -> str:
     while i < len(pairs):
         user_lead, user_msg = pairs[i][0]
         if '!@IGNORE' in user_msg:
-            # Remove previous pair if exists
-            if i > 0:
-                pairs.pop(i - 1)
-                i -= 1
-
+            # Count consecutive !@IGNORE directives
+            ignore_count = user_msg.count('!@IGNORE')
+            
+            # Remove previous pairs based on the count of !@IGNORE
+            for _ in range(ignore_count):
+                if i > 0:
+                    pairs.pop(i - 1)
+                    i -= 1
+            
             # Remove !@IGNORE and any whitespace before it (only inside USER message)
             cleaned_user_msg = re.sub(r'\s*!@IGNORE', '', user_msg)
             pairs[i][0][1] = cleaned_user_msg
+            
+            # If the cleaned message is empty, we should also remove this USER message
+            if not cleaned_user_msg.strip() and i < len(pairs):
+                pairs.pop(i)
+                continue  # Stay at the same index to check the next message
         i += 1
 
     # Rebuild conversation preserving exact spacing
