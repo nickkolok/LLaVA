@@ -421,7 +421,7 @@ if __name__ == "__main__":
     logger.info(args)
     demo = build_demo(args.embed)
     demo.queue(
-        concurrency_count=args.concurrency_count,
+        #concurrency_count=args.concurrency_count,
         api_open=False
     ).launch(
         server_name=args.host,
