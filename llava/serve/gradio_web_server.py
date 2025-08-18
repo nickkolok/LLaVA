@@ -65,6 +65,34 @@ function() {
 """
 
 
+def get_template_name(model_name):
+	if "llava" in model_name.lower():
+		if 'llama-2' in model_name.lower():
+			template_name = "llava_llama_2"
+		elif "v1" in model_name.lower():
+			if 'mmtag' in model_name.lower():
+				template_name = "v1_mmtag"
+			elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
+				template_name = "v1_mmtag"
+			else:
+				template_name = "llava_v1"
+		elif "mpt" in model_name.lower():
+			template_name = "mpt"
+		else:
+			if 'mmtag' in model_name.lower():
+				template_name = "v0_mmtag"
+			elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
+				template_name = "v0_mmtag"
+			else:
+				template_name = "llava_v0"
+	elif "mpt" in model_name:
+		template_name = "mpt_text"
+	elif "llama-2" in model_name:
+		template_name = "llama_2"
+	else:
+		template_name = "vicuna_v1"
+	return template_name
+
 def get_conv_log_filename():
     t = datetime.datetime.now()
     name = os.path.join(LOGDIR, f"{t.year}-{t.month:02d}-{t.day:02d}-conv.json")
@@ -149,9 +177,7 @@ def regenerate(state, image_process_mode, request: gr.Request):
     state.skip_next = False
     return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 5
 
-
 # Removed clear_history function since we no longer have Clear button
-
 
 def undo_last_message(state, request: gr.Request):
     logger.info(f"undo_last_message")
@@ -203,31 +229,7 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
 
     if len(state.messages) == state.offset + 2:
         # First round of conversation
-        if "llava" in model_name.lower():
-            if 'llama-2' in model_name.lower():
-                template_name = "llava_llama_2"
-            elif "v1" in model_name.lower():
-                if 'mmtag' in model_name.lower():
-                    template_name = "v1_mmtag"
-                elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
-                    template_name = "v1_mmtag"
-                else:
-                    template_name = "llava_v1"
-            elif "mpt" in model_name.lower():
-                template_name = "mpt"
-            else:
-                if 'mmtag' in model_name.lower():
-                    template_name = "v0_mmtag"
-                elif 'plain' in model_name.lower() and 'finetune' not in model_name.lower():
-                    template_name = "v0_mmtag"
-                else:
-                    template_name = "llava_v0"
-        elif "mpt" in model_name:
-            template_name = "mpt_text"
-        elif "llama-2" in model_name:
-            template_name = "llama_2"
-        else:
-            template_name = "vicuna_v1"
+        template_name = get_template_name(model_name)
         new_state = conv_templates[template_name].copy()
         new_state.append_message(new_state.roles[0], state.messages[-2][1])
         new_state.append_message(new_state.roles[1], None)
