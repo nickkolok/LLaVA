@@ -137,6 +137,34 @@ def undo_last_message(state, request: gr.Request):
     return (state, state.to_gradio_chatbot(), "", None) + (disable_btn,) * 4 + (no_change_btn,)
 
 
+def handle_send(state, text, image, image_process_mode, request: gr.Request):
+    """
+    Replaces the old add_text call for the Send button.
+    If the input contains at least one occurrence of '\n\n'
+    we treat it as a conversation log, otherwise we fall back
+    to normal chat behaviour.
+    """
+    import re
+    # Detect at least one blank line (two or more newlines)
+    log_pattern = re.search(r'\n\s*\n', text or "")
+    if log_pattern:
+        # ---- LOG MODE ------------------------------------------------
+        logger.info(f"load_conversation_log. ip: {request.client.host}")
+        blocks = re.split(r'\n\s*\n+', text.strip())
+        new_state = default_conversation.copy()
+        for idx, block in enumerate(blocks):
+            block = block.strip()
+            if not block:
+                continue
+            role = new_state.roles[0] if idx % 2 == 0 else new_state.roles[1]
+            new_state.append_message(role, block)
+        return (new_state,
+                new_state.to_gradio_chatbot(),
+                "", None) + (disable_btn,) * 5
+    else:
+        # ---- NORMAL CHAT MODE ---------------------------------------
+        return add_text(state, text, image, image_process_mode, request)
+
 def add_text(state, text, image, image_process_mode, request: gr.Request):
     logger.info(f"add_text. ip: {request.client.host}. len: {len(text)}")
     if len(text) <= 0 and image is None:
@@ -389,7 +417,7 @@ def build_demo(embed_mode):
         textbox.submit(add_text, [state, textbox, imagebox, image_process_mode], [state, chatbot, textbox, imagebox] + btn_list
             ).then(http_bot, [state, model_selector, temperature, top_p, max_output_tokens],
                    [state, chatbot] + btn_list)
-        submit_btn.click(add_text, [state, textbox, imagebox, image_process_mode], [state, chatbot, textbox, imagebox] + btn_list
+        submit_btn.click(handle_send, [state, textbox, imagebox, image_process_mode], [state, chatbot, textbox, imagebox] + btn_list
             ).then(http_bot, [state, model_selector, temperature, top_p, max_output_tokens],
                    [state, chatbot] + btn_list)
 
